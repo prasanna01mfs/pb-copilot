@@ -1,0 +1,135 @@
+<svg viewBox="0 0 1180 900" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#555"/>
+    </marker>
+  </defs>
+  <rect width="1180" height="900" fill="#ffffff"/>
+
+  <text x="590" y="34" text-anchor="middle" font-size="22" font-weight="700" fill="#1a1a1a">PB Copilot — Architecture</text>
+
+  <!-- UI layer -->
+  <rect x="40" y="60" width="220" height="60" rx="8" fill="#e8f0fe" stroke="#4285f4" stroke-width="1.5"/>
+  <text x="150" y="85" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">Gradio UI (upload-driven)</text>
+  <text x="150" y="103" text-anchor="middle" font-size="11" fill="#444">ui/app.py</text>
+
+  <rect x="300" y="60" width="220" height="60" rx="8" fill="#e8f0fe" stroke="#4285f4" stroke-width="1.5"/>
+  <text x="410" y="85" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">HTTP client</text>
+  <text x="410" y="103" text-anchor="middle" font-size="11" fill="#444">curl · Angular · … (any REST caller)</text>
+
+  <text x="580" y="95" text-anchor="middle" font-size="11" fill="#888">thin clients —</text>
+  <text x="580" y="109" text-anchor="middle" font-size="11" fill="#888">no agent logic</text>
+
+  <!-- FastAPI -->
+  <rect x="40" y="160" width="480" height="60" rx="8" fill="#fef7e0" stroke="#f9ab00" stroke-width="1.5"/>
+  <text x="280" y="185" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">FastAPI — /chat · /profile/upload · /profile/active · /health</text>
+  <text x="280" y="203" text-anchor="middle" font-size="11" fill="#444">api/server.py — UI-agnostic; new profile upload resets the session/context</text>
+
+  <line x1="150" y1="120" x2="280" y2="160" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="410" y1="120" x2="330" y2="160" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Harness -->
+  <rect x="40" y="255" width="480" height="150" rx="8" fill="#fce8e6" stroke="#ea4335" stroke-width="1.5"/>
+  <text x="280" y="278" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">Harness — harness/agent_runner.py</text>
+  <text x="280" y="296" text-anchor="middle" font-size="11" fill="#333">every turn (API, UI) runs through this — one reliability layer</text>
+  <text x="70" y="318" font-size="11" fill="#333">1. Context + PII redaction (starts a redaction session)</text>
+  <text x="70" y="335" font-size="11" fill="#333">2. Model/tool call with timeout</text>
+  <text x="70" y="352" font-size="11" fill="#333">3. Rate-limit throttle + 429-aware retry/backoff + capped tool loop</text>
+  <text x="70" y="369" font-size="11" fill="#333">4. Validate: grounded figures · sources cited · disclaimer · no guarantees</text>
+  <text x="70" y="386" font-size="11" fill="#333">5. Self-check (optional) · 6. Observability log + rehydrate PII</text>
+
+  <line x1="280" y1="220" x2="280" y2="255" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Privacy (side, feeding into harness step 1 and each agent's before_model_callback) -->
+  <rect x="580" y="255" width="220" height="90" rx="8" fill="#e6f4ea" stroke="#34a853" stroke-width="1.5"/>
+  <text x="690" y="278" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">Privacy Layer</text>
+  <text x="690" y="296" text-anchor="middle" font-size="10.5" fill="#333">privacy/redactor.py</text>
+  <text x="690" y="311" text-anchor="middle" font-size="10.5" fill="#333">privacy/adk_privacy.py</text>
+  <text x="690" y="329" text-anchor="middle" font-size="10.5" fill="#333">before_model_callback on ALL agents</text>
+  <line x1="580" y1="300" x2="520" y2="300" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="548" y="292" text-anchor="middle" font-size="9.5" fill="#888">redact/rehydrate</text>
+
+  <!-- Skill registry -->
+  <rect x="580" y="360" width="220" height="90" rx="8" fill="#f3e8fd" stroke="#a142f4" stroke-width="1.5"/>
+  <text x="690" y="383" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">Skill Registry</text>
+  <text x="690" y="401" text-anchor="middle" font-size="10.5" fill="#333">skill_registry.py</text>
+  <text x="690" y="416" text-anchor="middle" font-size="10.5" fill="#333">skills/*/SKILL.md (name, when-to-use,</text>
+  <text x="690" y="431" text-anchor="middle" font-size="10.5" fill="#333">tools, guardrails, examples)</text>
+
+  <!-- Orchestrator -->
+  <rect x="40" y="440" width="480" height="70" rx="8" fill="#fce8e6" stroke="#ea4335" stroke-width="1.5"/>
+  <text x="280" y="465" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">Orchestrator — agents/orchestrator.py</text>
+  <text x="280" y="483" text-anchor="middle" font-size="11" fill="#333">routes via AgentTool; tools + routing built FROM the skill registry</text>
+
+  <line x1="280" y1="405" x2="280" y2="440" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="690" y1="360" x2="330" y2="450" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="500" y="415" text-anchor="middle" font-size="9.5" fill="#888">generates tools + instruction</text>
+
+  <!-- Two specialist agents -->
+  <rect x="40" y="560" width="260" height="180" rx="8" fill="#e8f0fe" stroke="#4285f4" stroke-width="1.5"/>
+  <text x="170" y="583" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">FinanceAgent</text>
+  <text x="170" y="600" text-anchor="middle" font-size="10.5" fill="#333">agents/finance_agent.py</text>
+  <text x="170" y="622" text-anchor="middle" font-size="10.5" fill="#333">MCP tools (default)</text>
+  <text x="170" y="637" text-anchor="middle" font-size="10.5" fill="#333">tools/finance_mcp_server.py</text>
+  <text x="170" y="655" text-anchor="middle" font-size="9.5" fill="#888">— separate process —</text>
+  <text x="170" y="672" text-anchor="middle" font-size="10.5" fill="#333">fallback: direct functions</text>
+  <text x="170" y="689" text-anchor="middle" font-size="10.5" fill="#333">(PB_FINANCE_TOOLS=direct)</text>
+  <text x="170" y="710" text-anchor="middle" font-size="10.5" fill="#333">↓ tools/finance_tools.py</text>
+  <text x="170" y="727" text-anchor="middle" font-size="9.5" fill="#888">(pure calculators, pytest-covered)</text>
+
+  <rect x="320" y="560" width="200" height="180" rx="8" fill="#e8f0fe" stroke="#4285f4" stroke-width="1.5"/>
+  <text x="420" y="583" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">ResearchAgent</text>
+  <text x="420" y="600" text-anchor="middle" font-size="10.5" fill="#333">agents/research_agent.py</text>
+  <text x="420" y="622" text-anchor="middle" font-size="10.5" fill="#333">google_search</text>
+  <text x="420" y="639" text-anchor="middle" font-size="10.5" fill="#333">(ADK built-in grounding)</text>
+  <text x="420" y="661" text-anchor="middle" font-size="10.5" fill="#333">cache-on-success</text>
+  <text x="420" y="676" text-anchor="middle" font-size="10.5" fill="#333">tools/search_cache.py</text>
+
+  <line x1="170" y1="510" x2="170" y2="560" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="420" y1="510" x2="420" y2="560" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="60" y="533" font-size="10" fill="#888">"fix my finances"</text>
+  <text x="330" y="533" font-size="10" fill="#888">"latest news / research X"</text>
+  <text x="220" y="548" font-size="10" fill="#666" font-style="italic">cross-agent: "research X and assess fit" → BOTH → merged verdict</text>
+
+  <!-- Memory / profile -->
+  <rect x="580" y="560" width="220" height="150" rx="8" fill="#fef7e0" stroke="#f9ab00" stroke-width="1.5"/>
+  <text x="690" y="583" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">Memory (two layers)</text>
+  <text x="690" y="601" text-anchor="middle" font-size="10.5" fill="#333">STATE: profile → JSON datastore</text>
+  <text x="690" y="616" text-anchor="middle" font-size="10.5" fill="#333">profile_store.py · create/read/update</text>
+  <text x="690" y="631" text-anchor="middle" font-size="10.5" fill="#333">(active_profile.json, persists)</text>
+  <text x="690" y="653" text-anchor="middle" font-size="10.5" fill="#333">CONTEXT: conversation → in-memory</text>
+  <text x="690" y="668" text-anchor="middle" font-size="10.5" fill="#333">ADK session · reset per profile</text>
+  <text x="690" y="686" text-anchor="middle" font-size="9.5" fill="#888">↑ tools/excel_parser.py — parse_planner()</text>
+
+  <line x1="300" y1="650" x2="580" y2="650" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+
+  <!-- Data -->
+  <rect x="850" y="560" width="290" height="150" rx="8" fill="#f1f3f4" stroke="#5f6368" stroke-width="1.5"/>
+  <text x="995" y="583" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">Synthetic Data</text>
+  <text x="995" y="605" text-anchor="middle" font-size="10.5" fill="#333">data/PB_Planner_Profile1_Arjun.xlsx</text>
+  <text x="995" y="622" text-anchor="middle" font-size="10.5" fill="#333">(34, married, 42% card debt,</text>
+  <text x="995" y="637" text-anchor="middle" font-size="10.5" fill="#333">no term insurance)</text>
+  <text x="995" y="661" text-anchor="middle" font-size="10.5" fill="#333">data/PB_Planner_Profile2_Priya.xlsx</text>
+  <text x="995" y="678" text-anchor="middle" font-size="10.5" fill="#333">(26, single, no debt,</text>
+  <text x="995" y="693" text-anchor="middle" font-size="10.5" fill="#333">no emergency fund)</text>
+
+  <line x1="850" y1="635" x2="800" y2="650" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Model -->
+  <rect x="850" y="360" width="290" height="90" rx="8" fill="#f1f3f4" stroke="#5f6368" stroke-width="1.5"/>
+  <text x="995" y="383" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">Gemini (via ADK)</text>
+  <text x="995" y="401" text-anchor="middle" font-size="10.5" fill="#333">GEMINI_MODEL (flash-lite, default)</text>
+  <text x="995" y="416" text-anchor="middle" font-size="10.5" fill="#333">RESEARCH_MODEL (flash, grounding)</text>
+  <text x="995" y="431" text-anchor="middle" font-size="9.5" fill="#888">Google AI Studio — free tier, POC</text>
+
+  <line x1="800" y1="405" x2="850" y2="405" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+  <line x1="170" y1="560" x2="900" y2="450" stroke="#bbb" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="420" y1="560" x2="900" y2="450" stroke="#bbb" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- Legend -->
+  <rect x="40" y="800" width="1100" height="98" rx="8" fill="#fafafa" stroke="#ddd" stroke-width="1"/>
+  <text x="60" y="822" font-size="11.5" font-weight="700" fill="#333">Key concepts demonstrated:</text>
+  <text x="60" y="842" font-size="11" fill="#333">Multi-agent (ADK, AgentTool + skill-based routing)  ·  MCP (tools/finance_mcp_server.py)  ·  Security/Privacy (PII redaction, before_model_callback)</text>
+  <text x="60" y="860" font-size="11" fill="#333">Memory/State (JSON datastore for profile + in-memory ADK session for conversation, reset per profile)  ·  Harness engineering  ·  Agent skills (SKILL.md, Agents CLI)</text>
+  <text x="60" y="878" font-size="11" fill="#333">Observability (observability/tracker.py, per-turn JSONL)  ·  Rate-limiting (harness/throttle.py)  ·  Quality/testing (pytest — finance calcs + guardrails)</text>
+</svg>

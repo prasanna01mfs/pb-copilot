@@ -1,0 +1,24 @@
+# secrets
+.env
+*.key
+
+# python venv + cache
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# claude / editor / os
+.claude/
+.dev/
+.DS_Store
+.vscode/
+.idea/
+
+# runtime artifacts & logs
+logs/
+observability/*.jsonl
+data/active_profile.json
+
+# stray
+folder-structure.md
