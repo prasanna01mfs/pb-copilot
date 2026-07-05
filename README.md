@@ -5,13 +5,13 @@ Development Kit (ADK) with Gemini.
 
 ## Problem & who it's for
 
-Most people don't have a financial advisor, and the ones who do rarely get
-research help in the same place. PB Copilot is built for **a single user
-managing their own finances day to day**: someone who wants prioritized,
-number-backed advice on their emergency fund, insurance, debt and goals — and
-who also wants to research a fund, stock, or product before acting on it,
-*with that research assessed against their own financial situation*, not in
-the abstract.
+I don't have a financial advisor, and even if I did, I'd still have to do my
+own research on funds, stocks, or purchases before acting — usually in a
+different tool, disconnected from my actual financial picture. PB Copilot is
+built for exactly that gap in my own life: a personal assistant that gives
+prioritized, number-backed advice on my emergency fund, insurance, debt, and
+goals — and can research something I'm considering, then judge it against my
+real situation rather than in the abstract.
 
 ## Solution overview
 
@@ -287,9 +287,3 @@ pb-copilot/
   tools *could* legitimately produce and checks the model's stated numbers
   against that set — an invented figure is caught deterministically, for
   free, without an extra model call.
-
-## What's deferred (see the build plan, Sec 9)
-
-Real bank statement/PDF/CSV parsing, cloud deployment, long-term vector RAG
-memory, multi-user auth, and a real market-data API for FinanceAgent (research
-covers live info instead) are explicitly out of scope for this build.
