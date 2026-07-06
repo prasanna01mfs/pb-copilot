@@ -1,6 +1,7 @@
-"""Client-side rate limiter — pace outgoing model calls UNDER the free-tier
-per-minute cap, so we don't trigger a 429 by our own call volume in the first
-place (prevention is cheaper and faster than reacting to a 429 after the fact).
+"""Client-side rate limiter — pace outgoing model calls UNDER whatever
+per-minute cap applies to your tier, so we don't trigger a 429 by our own call
+volume in the first place (prevention is cheaper and faster than reacting to a
+429 after the fact).
 
 How it's wired: `throttle_before_model` is added as the FIRST entry in each
 agent's before_model_callback list. before_model_callback is awaited by ADK
@@ -9,13 +10,14 @@ actual API calls. Because the agents run sequentially (AgentTool awaits each
 sub-agent, and the API serializes turns), simple per-model spacing is enough —
 no distributed token bucket needed.
 
-Per-model, because flash and flash-lite are SEPARATE free-tier quota buckets
-with different limits: lite's per-minute allowance is ~2x flash's, so it gets
-double the RPM here. Defaults sit comfortably under the caps (≈15 flash /
-≈30 lite) to leave headroom for calls we don't control (e.g. Google Search
-grounding makes its own internal model calls).
+Per-model, because flash and flash-lite were SEPARATE free-tier quota buckets
+with different limits: lite's per-minute allowance was ~2x flash's, so it
+still gets double the configured RPM below — harmless on a paid tier where
+neither model is actually named "lite" (see PB_MAX_RPM's default), and it
+keeps this logic correct if you ever repin back to a lite model.
 
-Tune with PB_MAX_RPM (the flash/flagship bucket; lite is auto-doubled).
+Tune with PB_MAX_RPM. Defaults to a generous pay-as-you-go-tier value; if you
+know your tier's actual per-minute limit, set this a bit under it instead.
 """
 from __future__ import annotations
 
@@ -26,9 +28,10 @@ import time
 
 logger = logging.getLogger("pb.harness")
 
-# Flash/flagship bucket RPM. Kept a few under the ~15 free-tier cap for margin;
-# lite is doubled below. Turn it up if you move to a paid tier.
-_BASE_RPM = int(os.getenv("PB_MAX_RPM", "12"))
+# Base RPM (per model); a "lite"-named model gets 2x this, below. 60 is a
+# generous pay-as-you-go-tier default — turn it down if you actually see 429s,
+# or up once you know your tier's real per-minute limit.
+_BASE_RPM = int(os.getenv("PB_MAX_RPM", "60"))
 
 _locks: dict[str, asyncio.Lock] = {}
 _last_call: dict[str, float] = {}

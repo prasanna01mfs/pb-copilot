@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from google.adk.agents.invocation_context import LlmCallsLimitExceededError
 from google.adk.agents.run_config import RunConfig
 from google.genai import types
-from google.genai.errors import ClientError
+from google.genai.errors import ClientError, ServerError
 
 from memory import profile_store
 from observability import tracker as observability
@@ -54,7 +54,11 @@ from tools import finance_tools
 logger = logging.getLogger("pb.harness")
 
 # --- Tunables (env-overridable so tests can force timeouts/retries cheaply) ---
-TIMEOUT_S = float(os.getenv("PB_HARNESS_TIMEOUT", "60"))         # layer 2
+# gemini-2.5-pro reasons more (and this turn's tool-calling loop can run several
+# rounds), so it routinely needs well over a flash model's ~10-20s — 60s was
+# tuned for flash and cut Pro off mid-response every time in practice. 150s
+# gives a full-analysis turn room to actually finish on the first attempt.
+TIMEOUT_S = float(os.getenv("PB_HARNESS_TIMEOUT", "150"))        # layer 2
 MAX_RETRIES = int(os.getenv("PB_HARNESS_RETRIES", "2"))          # layer 3 (retries AFTER the first try)
 BACKOFF_BASE_S = float(os.getenv("PB_HARNESS_BACKOFF", "2"))     # layer 3 (timeouts/5xx: 2s, 4s, ...)
 # A 429 means a per-MINUTE window is full — short 2s/4s waits won't clear it, so
@@ -64,6 +68,21 @@ RATE_LIMIT_BACKOFF_S = float(os.getenv("PB_HARNESS_RL_BACKOFF", "8"))       # 8s
 RATE_LIMIT_BACKOFF_MAX_S = float(os.getenv("PB_HARNESS_RL_BACKOFF_MAX", "45"))
 MAX_LLM_CALLS = int(os.getenv("PB_HARNESS_MAX_LLM_CALLS", "12")) # layer 3 (tool-loop cap per turn)
 SELF_CHECK_DEFAULT = os.getenv("PB_SELF_CHECK") == "1"           # layer 5 (costs one extra model call)
+
+# layer 3 — MODEL fallback. A 503 "model overloaded / high demand" error means
+# THAT MODEL's serving capacity is the problem, not our request pattern (unlike
+# a 429, which is OUR quota) — retrying the same model with backoff just wastes
+# the turn's time budget. After this many CONSECUTIVE overload errors, swap the
+# affected agent(s) to a different model for the rest of this turn (and grant
+# one extra attempt so the swap actually gets tried, not just used up giving
+# up). Set PB_MODEL_FALLBACK_AFTER=0 to disable. Fallbacks are pinned (non
+# "-latest") versions on purpose: an alias can point at the same overloaded
+# release the primary model resolved to. This is real financial analysis, so
+# the fallback default is still flagship Flash — NOT a lite model — a 503
+# should cost some depth/speed, never accuracy.
+MODEL_FALLBACK_AFTER = int(os.getenv("PB_MODEL_FALLBACK_AFTER", "2"))
+GEMINI_MODEL_FALLBACK = os.getenv("GEMINI_MODEL_FALLBACK", "gemini-2.5-flash")
+RESEARCH_MODEL_FALLBACK = os.getenv("RESEARCH_MODEL_FALLBACK", "gemini-2.5-flash")
 
 # Numbers below this are months/percentages/ages/years — not monetary figures,
 # so we don't try to validate them against tool outputs.
@@ -115,6 +134,11 @@ _NUM_RE = re.compile(
     r"(?:₹|Rs\.?)\s*(\d[\d,]*(?:\.\d+)?)"      # group 1: currency-prefixed
     r"|\b(\d{1,3}(?:,\d{2,3})+(?:\.\d+)?)\b"    # group 2: comma-grouped
 )
+# The profile is always in Indian Rupees, so a $-prefixed figure in a finance
+# answer is wrong regardless of its numeric value (it's either a mislabeled ₹
+# figure or a stray USD one) — catch it even though _NUM_RE's comma-grouped
+# alternative would otherwise let it slip through as "grounded".
+_USD_RE = re.compile(r"\$\s*\d[\d,]*(?:\.\d+)?")
 
 
 # --- Structured results -----------------------------------------------------
@@ -137,6 +161,7 @@ class HarnessState:
     repaired: bool = False
     self_check: dict | None = None
     fell_back: bool = False
+    model_fallback: bool = False
     elapsed_s: float = 0.0
 
     def summary(self) -> str:
@@ -146,6 +171,7 @@ class HarnessState:
             f"profile={self.profile_version} attempts={self.attempts} "
             f"timed_out={self.timed_out} capped={self.capped} "
             f"valid={None if v is None else v.ok} repaired={self.repaired} "
+            f"model_fallback={self.model_fallback} "
             f"fell_back={self.fell_back} {self.elapsed_s:.1f}s"
         )
 
@@ -230,16 +256,29 @@ def _figure_is_grounded(n: float, legit: set[float]) -> bool:
     return any(abs(n - f) <= max(1.0, _FIGURE_TOL * f) for f in legit)
 
 
-def validate_finance_text(text: str, legit_figures: set[float]) -> ValidationResult:
-    """Validate a finance answer against the tool-computable figures + guardrails."""
+def validate_finance_text(text: str, legit_figures: set[float],
+                          strict_figures: bool = True) -> ValidationResult:
+    """Validate a finance answer against the tool-computable figures + guardrails.
+
+    `strict_figures` enforces that every large monetary figure matches a finance
+    tool output — the anti-hallucination guard for a FINANCE-ONLY turn. It's
+    turned OFF for a cross-agent (research + finance) MERGE, because that answer
+    legitimately synthesizes external research with the profile and derives new
+    amounts (a suggested SIP in the fund, a combined monthly total) that aren't
+    verbatim tool outputs. The safety guards (disclaimer, no guaranteed returns,
+    ₹-not-$) still apply in both cases.
+    """
     issues: list[str] = []
     if not _DISCLAIMER_RE.search(text or ""):
         issues.append("missing educational disclaimer")
     if _GUARANTEE_RE.search(text or ""):
         issues.append("contains guaranteed-return language")
-    ungrounded = [n for n in _answer_figures(text) if not _figure_is_grounded(n, legit_figures)]
-    if ungrounded:
-        issues.append(f"figures not grounded in tool outputs: {sorted(set(ungrounded))}")
+    if _USD_RE.search(text or ""):
+        issues.append("used $ instead of ₹ for a rupee figure")
+    if strict_figures:
+        ungrounded = [n for n in _answer_figures(text) if not _figure_is_grounded(n, legit_figures)]
+        if ungrounded:
+            issues.append(f"figures not grounded in tool outputs: {sorted(set(ungrounded))}")
     return ValidationResult(ok=not issues, issues=issues)
 
 
@@ -260,7 +299,11 @@ def _validate(text: str, agents_run: list[str], legit_figures: set[float]) -> Va
     ran_finance = "finance_agent" in agents_run
     ran_research = "research_agent" in agents_run
     if ran_finance:
-        issues += validate_finance_text(text, legit_figures).issues
+        # Strict figure-grounding only for a finance-ONLY turn; a cross-agent
+        # merge (research + finance) synthesizes derived amounts that aren't
+        # verbatim tool outputs, so relax it there (guardrails still enforced).
+        issues += validate_finance_text(
+            text, legit_figures, strict_figures=not ran_research).issues
     if ran_research:
         issues += validate_research_text(text).issues
     # If neither specialist ran (e.g. an off-topic decline), there's nothing to
@@ -287,6 +330,46 @@ def _is_rate_limit(exc: BaseException) -> bool:
         return True
     s = str(exc).upper()
     return "429" in s or "RESOURCE_EXHAUSTED" in s
+
+
+def _is_server_overload(exc: BaseException) -> bool:
+    """Specifically a 503 'model overloaded / high demand' error — as opposed to
+    a 429 (OUR quota) or a bare timeout. Distinguished from _is_transient because
+    the response here is different: retrying the SAME model just re-queues
+    behind the same overload, so this triggers a MODEL swap (see
+    MODEL_FALLBACK_AFTER) rather than another backoff-and-retry of the model
+    that's already struggling."""
+    if isinstance(exc, ServerError) and getattr(exc, "code", None) == 503:
+        return True
+    s = str(exc).upper()
+    return "UNAVAILABLE" in s or "HIGH DEMAND" in s
+
+
+def _iter_llm_agents(runner):
+    """Yield every LlmAgent this turn might call: the root agent plus each
+    specialist wrapped in an AgentTool. Walking `runner.agent.tools` rather than
+    importing finance_agent/research_agent directly keeps the harness
+    agent-agnostic (same reason it takes a bare `runner`, per the module
+    docstring) — it works for the orchestrator or a lone specialist alike."""
+    root = getattr(runner, "agent", None)
+    if root is None:
+        return
+    yield root
+    for tool in getattr(root, "tools", None) or []:
+        inner = getattr(tool, "agent", None)
+        if inner is not None:
+            yield inner
+
+
+def _fallback_model_for(agent) -> str:
+    """Which fallback model an agent should switch to on repeated overload.
+
+    research_agent needs a grounding-capable model (see agents/research_agent.py);
+    everything else (orchestrator, finance_agent) shares GEMINI_MODEL, so they
+    share its fallback too.
+    """
+    return RESEARCH_MODEL_FALLBACK if getattr(agent, "name", "") == "research_agent" \
+        else GEMINI_MODEL_FALLBACK
 
 
 def _retry_delay(exc: BaseException, attempt: int) -> float:
@@ -366,34 +449,71 @@ async def run_through_harness(
 
     # ---- Layers 2 + 3: call with timeout, retry-with-backoff, capped loop ----
     run_out: _RunOutput | None = None
-    for attempt in range(1, MAX_RETRIES + 2):  # 1 initial try + MAX_RETRIES retries
-        state.attempts = attempt
-        try:
-            run_out = await asyncio.wait_for(
-                _drive_once(runner, user_id=user_id, session_id=session_id, message=message),
-                timeout=TIMEOUT_S,
-            )
-            break
-        except LlmCallsLimitExceededError:
-            # Runaway tool loop hit the cap — do not retry a runaway; fail safe.
-            state.capped = True
-            logger.warning("tool-loop cap (%s) exceeded; returning safe fallback", MAX_LLM_CALLS)
-            break
-        except Exception as exc:  # noqa: BLE001 — classify, then retry or give up
-            if isinstance(exc, asyncio.TimeoutError):
-                state.timed_out = True
-            transient = _is_transient(exc)
-            last_attempt = attempt >= MAX_RETRIES + 1
-            if not transient or last_attempt:
-                logger.warning("attempt %s failed (%s, transient=%s) — giving up",
-                               attempt, type(exc).__name__, transient)
+    max_attempts = MAX_RETRIES + 2  # 1 initial try + MAX_RETRIES retries
+    overload_streak = 0
+    fallback_applied = False
+    original_models: dict[int, str] = {}
+    attempt = 0
+    try:
+        while attempt < max_attempts:
+            attempt += 1
+            state.attempts = attempt
+            try:
+                run_out = await asyncio.wait_for(
+                    _drive_once(runner, user_id=user_id, session_id=session_id, message=message),
+                    timeout=TIMEOUT_S,
+                )
                 break
-            # 429 -> long backoff (per-minute window must clear); else short.
-            # Jittered to avoid synchronized retries. See _retry_delay.
-            delay = _retry_delay(exc, attempt)
-            logger.warning("attempt %s failed (%s, rate_limit=%s) — backing off %.1fs",
-                           attempt, type(exc).__name__, _is_rate_limit(exc), delay)
-            await asyncio.sleep(delay)
+            except LlmCallsLimitExceededError:
+                # Runaway tool loop hit the cap — do not retry a runaway; fail safe.
+                state.capped = True
+                logger.warning("tool-loop cap (%s) exceeded; returning safe fallback", MAX_LLM_CALLS)
+                break
+            except Exception as exc:  # noqa: BLE001 — classify, then retry or give up
+                if isinstance(exc, asyncio.TimeoutError):
+                    state.timed_out = True
+                transient = _is_transient(exc)
+                overload_streak = overload_streak + 1 if _is_server_overload(exc) else 0
+                # The model itself (not our request pattern) is overloaded —
+                # backing off and re-asking the SAME model just re-queues behind
+                # the same congestion. Switch to a different model instead, and
+                # grant one extra attempt so the swap actually gets exercised
+                # rather than immediately being consumed by "last attempt, give
+                # up" below.
+                if (MODEL_FALLBACK_AFTER > 0 and not fallback_applied
+                        and overload_streak >= MODEL_FALLBACK_AFTER):
+                    fallback_applied = True
+                    state.model_fallback = True
+                    max_attempts += 1
+                    for agent in _iter_llm_agents(runner):
+                        original_models.setdefault(id(agent), agent.model)
+                        target = _fallback_model_for(agent)
+                        if agent.model != target:
+                            logger.warning(
+                                "model overload (%d consecutive 503s) — switching %s: %s -> %s",
+                                overload_streak, getattr(agent, "name", "?"), agent.model, target,
+                            )
+                            agent.model = target
+                last_attempt = attempt >= max_attempts
+                if not transient or last_attempt:
+                    logger.warning("attempt %s failed (%s, transient=%s) — giving up",
+                                   attempt, type(exc).__name__, transient)
+                    break
+                # 429 -> long backoff (per-minute window must clear); else short.
+                # Jittered to avoid synchronized retries. See _retry_delay.
+                delay = _retry_delay(exc, attempt)
+                logger.warning("attempt %s failed (%s, rate_limit=%s) — backing off %.1fs",
+                               attempt, type(exc).__name__, _is_rate_limit(exc), delay)
+                await asyncio.sleep(delay)
+    finally:
+        # Always restore the primary model(s), win or lose — a fallback used for
+        # ONE degraded turn must not silently stick for every turn after it; the
+        # next turn should try the primary model fresh in case Google's overload
+        # has cleared by then.
+        for agent in _iter_llm_agents(runner):
+            orig = original_models.get(id(agent))
+            if orig is not None:
+                agent.model = orig
 
     # No usable output from any attempt -> safe fallback (never a stack trace).
     if run_out is None or not run_out.final_text:
@@ -451,6 +571,7 @@ async def _repair(runner, user_id, session_id, message, issues) -> _RunOutput | 
         f"{'; '.join(issues)}. Fix ALL of them and answer again, keeping every "
         f"standing rule: for research, list your sources inline in a 'Sources:' "
         f"section; for finance advice, use ONLY figures your tools returned; "
+        f"state every monetary figure in ₹ (Indian Rupees), never $; "
         f"include the educational disclaimer; make no guaranteed-return claims.]"
     )
     try:

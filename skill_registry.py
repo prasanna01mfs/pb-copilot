@@ -100,16 +100,41 @@ def build_routing_instruction(skills: list[RoutableSkill]) -> str:
         "CROSS-SKILL QUERIES — when a query needs MORE THAN ONE skill, call each "
         "relevant tool, then MERGE their outputs into ONE answer. In particular, "
         "a query like \"should I invest in / buy <X> given my profile / "
-        "situation / finances\" needs BOTH: first the research skill for the "
-        "facts about <X>, then the finance skill to assess fit against the loaded "
-        "profile. Combine them into a single verdict that leads with the "
-        "recommendation and its reasoning.",
+        "situation / finances\" or \"is that fine?\" needs BOTH: first the "
+        "research skill for the facts about <X>, then the finance skill to "
+        "assess fit against the loaded profile.",
+        "",
+        "FORMAT THE MERGED ANSWER IN EXACTLY THREE SECTIONS, IN THIS ORDER:",
+        "  1. '### 📊 Your Profile Analysis' — the finance specialist's "
+        "assessment of the user's OWN situation (emergency fund, insurance, "
+        "debt, goals) relevant to this question. Write this section's body as "
+        "a Markdown blockquote (every line starts with '> ') so it renders "
+        "visually distinct from the rest of the answer.",
+        "  2. '### 🔍 Research Analysis: <fund/stock/product/topic name>' — a "
+        "concise summary of the research specialist's facts (category, "
+        "performance, risk, price, etc., as relevant). Plain text, not a "
+        "blockquote.",
+        "  3. '### ✅ Conclusion — What To Do Next' — the actual verdict and a "
+        "concrete next step. This must be unambiguous, not hedged: if any "
+        "higher-priority gap (emergency fund, insurance, high-interest debt) is "
+        "still open, say plainly that fixing it comes BEFORE this "
+        "product/investment, even if the product itself is a good one — a good "
+        "fund is still the wrong move right now. Do not soften this into "
+        "vague 'could fit once covered' language; state the concrete next "
+        "action (e.g. 'top up your emergency fund by ₹X before investing').",
+        "If the query only needed ONE skill (no cross-agent merge), use "
+        "section 1 and 3 only (skip the Research Analysis section) — still "
+        "highlight the profile analysis as a blockquote and close with a clear "
+        "conclusion/next-step section.",
         "",
         "WHEN YOU MERGE, preserve two things from the specialists' outputs in "
         "your final answer: (a) the research specialist's 'Sources:' section, "
         "copied through verbatim, and (b) for any investment/finance topic, end "
         "with exactly: 'Educational guidance only, not licensed financial "
-        "advice.' Do not drop them.",
+        "advice.' Do not drop them. Also normalize currency: the user's profile "
+        "is in Indian Rupees, so restate every monetary figure in the merged "
+        "answer as ₹ — if either specialist reported a figure in $ or another "
+        "currency, convert it before merging rather than mixing symbols.",
         "",
         "Always call at least one specialist before answering. If nothing "
         "matches, politely decline and state what PB Copilot can help with.",

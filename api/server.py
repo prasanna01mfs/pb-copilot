@@ -181,6 +181,20 @@ async def active_profile() -> dict:
     return {"loaded": True, **_profile_display()}
 
 
+@app.post("/profile/clear")
+async def clear_profile() -> dict:
+    """Drop the active profile and reset the conversation context.
+
+    The UI calls this on page (re)load, so a browser refresh returns to a clean
+    'no profile loaded' state — nothing about the previous person survives in
+    memory, on disk, or in the model's conversation context.
+    """
+    async with _turn_lock:
+        profile_store.clear()
+        await _reset_session()
+    return {"loaded": False}
+
+
 @app.post("/profile/upload")
 async def upload_profile(file: UploadFile = File(...)) -> dict:
     """Parse an uploaded .xlsx planner and make it the active profile.

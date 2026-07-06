@@ -12,8 +12,11 @@ Two ADK specifics that shape this file:
   finance agent, and the orchestrator merges the two. (This is exactly why the
   cross-agent flow is orchestrated, not crammed into one agent.)
 - Grounding needs a grounding-capable model, so ResearchAgent has its own
-  RESEARCH_MODEL (default: flagship gemini-flash-latest). Bonus: that's a
-  separate free-tier quota bucket from the lite model the other agents use.
+  RESEARCH_MODEL — kept as a separate env var so it CAN be repinned
+  independently of FinanceAgent/the orchestrator's GEMINI_MODEL. This is real
+  research feeding an investment decision, so it defaults to the same
+  accuracy-first model as the rest of the app (gemini-2.5-pro), not a
+  quota-saving lite variant.
 """
 import logging
 import os
@@ -29,8 +32,8 @@ from tools import search_cache
 
 logger = logging.getLogger("pb.research")
 
-# Own model so grounding is reliable + lands on a separate quota bucket.
-RESEARCH_MODEL = os.getenv("RESEARCH_MODEL", "gemini-flash-latest")
+# Own env var so it can be repinned independently of GEMINI_MODEL if needed.
+RESEARCH_MODEL = os.getenv("RESEARCH_MODEL", "gemini-2.5-pro")
 
 # Where the agent's final answer is stashed in session state, so the after-agent
 # cache callback can read and store it.
@@ -86,6 +89,10 @@ MODES (detect which one the query needs):
   strengths) and a clear recommendation with reasoning.
 
 ALWAYS:
+- The user is in India and their profile is in Indian Rupees. Quote any price,
+  cost, AUM or fee you cite in ₹ — if a source states it in USD or another
+  currency, convert to ₹ (state the approximate rate/date used) rather than
+  reporting a bare $ figure that could be mistaken for a rupee amount.
 - End your reply with a "Sources:" section listing 2–3 sources (title and/or
   URL) written INLINE in your text. The search tool's citations are NOT
   automatically visible to the user — you must write the sources into your

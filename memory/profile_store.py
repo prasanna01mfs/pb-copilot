@@ -63,6 +63,23 @@ def set_active(profile: dict) -> None:
     _save_json()
 
 
+def clear() -> None:
+    """Drop the active profile from memory AND delete its persisted JSON.
+
+    Used to return to a clean 'no profile loaded' state (e.g. on a UI refresh),
+    so nothing about a previous person survives. The separate MCP-server process
+    reads active_profile.json, so removing the file is what actually resets it
+    there too.
+    """
+    global _active
+    _active = None
+    try:
+        if os.path.exists(_STORE_PATH):
+            os.remove(_STORE_PATH)
+    except OSError:
+        pass
+
+
 def version() -> str:
     """A stable tag identifying the current profile state, e.g. 'Arjun#3'.
 

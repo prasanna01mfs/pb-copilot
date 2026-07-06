@@ -262,11 +262,16 @@ pb-copilot/
 
 - **Model choice:** the plan originally specified Gemini 2.0 Flash, but it has
   since been **shut down** (confirmed against current Gemini docs at build
-  time). `GEMINI_MODEL` defaults to `gemini-flash-lite-latest` (a
-  larger free-tier quota, on its own quota bucket) and `RESEARCH_MODEL`
-  defaults to `gemini-flash-latest` (grounding-capable, and a separate quota
-  bucket from the lite model) — both are `.env` variables, not hardcoded, so
-  they can be repinned without touching code.
+  time). On a paid tier, `GEMINI_MODEL` and `RESEARCH_MODEL` both default to
+  `gemini-2.5-pro` — this is real financial analysis and research feeding
+  real decisions, so accuracy/reliability is prioritized over free-tier quota
+  conservation. Both remain separate `.env` variables (not hardcoded) so they
+  can be repinned independently — e.g. back to a cheaper `gemini-flash-*`
+  variant if you're on the free tier instead. If the primary model 503s
+  ("high demand") twice in a row, the harness auto-switches to
+  `GEMINI_MODEL_FALLBACK`/`RESEARCH_MODEL_FALLBACK` (default: flagship
+  `gemini-2.5-flash`, deliberately not a lite model) for the rest of that
+  turn, then reverts for the next one (`harness/agent_runner.py`).
 - **AgentTool over `sub_agents` transfer:** the orchestrator needed to call
   *two* specialists in one turn and merge their output (the cross-agent flow).
   ADK's `sub_agents` delegation permanently hands off control to one agent;

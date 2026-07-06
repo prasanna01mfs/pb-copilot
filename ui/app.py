@@ -33,7 +33,20 @@ from observability import tracker as observability  # noqa: E402
 logger = logging.getLogger("pb.ui")
 
 API_BASE_URL = os.getenv("PB_API_URL", "http://127.0.0.1:8000")
-_client = httpx.AsyncClient(base_url=API_BASE_URL, timeout=90.0)
+# A cross-agent turn can legitimately chain several harness attempts/backoffs
+# (harness/agent_runner.py: up to 4 attempts * PB_HARNESS_TIMEOUT, which is
+# itself 150s by default now that GEMINI_MODEL defaults to the slower-but-more-
+# accurate gemini-2.5-pro, plus rate-limit backoffs, plus one repair pass) —
+# the client timeout must comfortably exceed that worst case, or a
+# slow-but-healthy turn gets shown to the user as "Could not reach API" even
+# though the backend was still working and would have answered. Read gets the
+# generous budget; connect fails fast since a down backend refuses the
+# connection immediately.
+PB_UI_READ_TIMEOUT_S = float(os.getenv("PB_UI_READ_TIMEOUT_S", "600"))
+_client = httpx.AsyncClient(
+    base_url=API_BASE_URL,
+    timeout=httpx.Timeout(connect=10.0, read=PB_UI_READ_TIMEOUT_S, write=30.0, pool=10.0),
+)
 
 def _format_active(data: dict) -> str:
     """Render the active-profile panel from GET /profile/active or the upload
@@ -63,16 +76,22 @@ def _format_active(data: dict) -> str:
     return line
 
 
-async def fetch_active_profile() -> tuple[str, str]:
-    """(profile_status_text, error_text) — called on page load to show whatever
-    is currently active (nothing, until the first upload)."""
+async def reset_on_load():
+    """Page-(re)load handler — CLEAR everything, so a browser refresh starts fresh.
+
+    Returns (profile_markdown, error_markdown, chatbot). We POST /profile/clear
+    to drop the active profile from the API's memory + disk + conversation
+    context, then reset the UI: empty chat and the "upload to begin" prompt.
+    This is what makes a refresh wipe the previous person's profile and chat.
+    """
+    err = ""
     try:
-        r = await _client.get("/profile/active")
+        r = await _client.post("/profile/clear")
         r.raise_for_status()
-        return _format_active(r.json()), ""
     except httpx.HTTPError as exc:
-        logger.warning("fetch_active_profile failed: %s", type(exc).__name__)
-        return "**Active profile:** (unknown)", f"⚠️ Could not reach API at {API_BASE_URL}: {exc}"
+        logger.warning("reset_on_load failed: %s", type(exc).__name__)
+        err = f"⚠️ Could not reach API at {API_BASE_URL}: {exc}"
+    return "**No profile loaded.** Upload a planner (.xlsx) to begin.", err, []
 
 
 async def upload_profile(filepath: str | None):
@@ -161,6 +180,23 @@ async def send_message(message: str, history: list[dict]):
     yield history + [{"role": "assistant", "content": answer}], ""
 
 
+# Colors the "Your Profile Analysis" section of an answer (agents/finance_agent.py
+# and skill_registry.py instruct the model to write that section as a Markdown
+# blockquote). This is static, developer-authored CSS targeting the standard
+# <blockquote> tag Gradio's own Markdown renderer produces — NOT raw HTML from
+# model output, so it carries none of the injection risk that trusting
+# model-emitted <div style=...> would (the model's answer can include text from
+# live web search results, which must never be treated as trusted markup).
+_PROFILE_ANALYSIS_CSS = """
+.message-wrap blockquote {
+    background: rgba(59, 130, 246, 0.08);
+    border-left: 4px solid #3b82f6;
+    padding: 0.5em 1em;
+    margin: 0.5em 0;
+    border-radius: 4px;
+}
+"""
+
 with gr.Blocks(title="PB Copilot") as demo:
     gr.Markdown(
         "# PB Copilot\n"
@@ -199,7 +235,12 @@ with gr.Blocks(title="PB Copilot") as demo:
     # so a previous person's conversation never bleeds into the new profile.
     upload.upload(fn=upload_profile, inputs=[upload],
                   outputs=[active_profile_md, error_md, chatbot])
-    demo.load(fn=fetch_active_profile, inputs=None, outputs=[active_profile_md, error_md])
+    # On page (re)load: clear the profile (memory + disk + context) and the chat,
+    # so a browser refresh starts from a clean "upload to begin" state. Also
+    # clear the file widget so it doesn't still show the last uploaded filename.
+    demo.load(fn=reset_on_load, inputs=None,
+              outputs=[active_profile_md, error_md, chatbot])
+    demo.load(fn=lambda: None, inputs=None, outputs=[upload])
 
     send_btn.click(fn=send_message, inputs=[msg_box, chatbot], outputs=[chatbot, msg_box])
     msg_box.submit(fn=send_message, inputs=[msg_box, chatbot], outputs=[chatbot, msg_box])
@@ -210,4 +251,4 @@ if __name__ == "__main__":
     observability.configure_logging(verbose=os.getenv("PB_DEBUG_REDACTION") == "1")
     print(f"Gradio UI starting. Talking to PB Copilot API at {API_BASE_URL}")
     print("(Make sure `uvicorn api.server:app --port 8000` is already running.)")
-    demo.launch()
+    demo.launch(css=_PROFILE_ANALYSIS_CSS)

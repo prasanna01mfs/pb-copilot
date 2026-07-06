@@ -20,6 +20,8 @@ This module adds, all intentionally simple for a local POC:
      finance_agent, research_agent) starts and finishes, with duration.
   4. `llm_call_before/after` — logs each individual model call's latency,
      token usage, and finish_reason.
+     (3 and 4 are the per-STEP trail — persisted to logs/steps.jsonl AND shown
+     on the console, so the fine-grained detail survives past the run.)
   5. `record_http_request(...)` — logs every API request (method, path,
      status, latency) to logs/api_requests.jsonl.
 
@@ -40,12 +42,27 @@ from pathlib import Path
 
 _OBS_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "observability.jsonl"
 _API_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "api_requests.jsonl"
+# Per-STEP trail: one line per agent span and per model call, so the fine-grained
+# detail (which the console shows but used to lose) is also queryable after a run.
+_STEPS_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "steps.jsonl"
 
 obs_logger = logging.getLogger("pb.observability")
 api_logger = logging.getLogger("pb.api")
 
 _lock = threading.Lock()
 _turn_counter = 0
+
+
+def _append_jsonl(path: Path, record: dict) -> None:
+    """Append one JSON line to `path`. Never raises — observability must not
+    break the operation it's describing."""
+    record.setdefault("timestamp", datetime.now(timezone.utc).isoformat(timespec="milliseconds"))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except OSError:
+        pass
 
 
 def configure_logging(verbose: bool = False) -> None:
@@ -169,6 +186,8 @@ async def agent_span_after(callback_context) -> None:
     start = _agent_span_starts.pop(key, None)
     duration = (time.monotonic() - start) if start is not None else -1.0
     obs_logger.info("agent=%s span=%.2fs source=live", key[1], duration)
+    _append_jsonl(_STEPS_LOG_PATH, {"step": "agent_span", "agent": key[1],
+                                    "duration_s": round(duration, 3), "source": "live"})
     return None
 
 
@@ -182,6 +201,8 @@ def log_agent_span_from_cache(callback_context) -> None:
     start = _agent_span_starts.pop(key, None)
     duration = (time.monotonic() - start) if start is not None else 0.0
     obs_logger.info("agent=%s span=%.2fs source=cache", key[1], duration)
+    _append_jsonl(_STEPS_LOG_PATH, {"step": "agent_span", "agent": key[1],
+                                    "duration_s": round(duration, 3), "source": "cache"})
 
 
 # --- Per-LLM-call metadata (latency, tokens, finish_reason — NEVER text) ----
@@ -224,6 +245,11 @@ async def llm_call_after(callback_context, llm_response) -> None:
         "total_tokens=%s finish_reason=%s",
         agent, latency, prompt_tokens, response_tokens, total_tokens, finish_reason,
     )
+    _append_jsonl(_STEPS_LOG_PATH, {
+        "step": "llm_call", "agent": agent, "latency_s": round(latency, 3),
+        "prompt_tokens": prompt_tokens, "response_tokens": response_tokens,
+        "total_tokens": total_tokens, "finish_reason": finish_reason,
+    })
     return None
 
 

@@ -26,7 +26,7 @@ from observability import tracker as observability
 from privacy.adk_privacy import redaction_before_model
 from skill_registry import build_routing_instruction, load_routable_skills
 
-ORCHESTRATOR_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
+ORCHESTRATOR_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
 
 # Discover the specialists from their skill declarations. This list — the tools
 # and the routing instruction below — is entirely data-driven from skills/.
